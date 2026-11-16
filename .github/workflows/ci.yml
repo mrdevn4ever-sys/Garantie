@@ -1,0 +1,95 @@
+name: Bauen und testen
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Kernlogik (Unit-Tests)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift-Version
+        run: swift --version
+      - name: Tests
+        working-directory: KaufarchivCore
+        run: swift test 2>&1 | tail -n 150
+
+  app-build:
+    name: App bauen und im Simulator starten
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode-Version
+        run: xcodebuild -version
+      - name: App für den Simulator bauen
+        run: |
+          xcodebuild -project Kaufarchiv.xcodeproj -scheme Kaufarchiv -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build > build.log 2>&1 || {
+              echo "::group::Fehler"
+              grep -E "error:|error :" build.log | sort -u | head -n 200
+              echo "::endgroup::"
+              tail -n 40 build.log
+              exit 1
+            }
+          grep -E "warning:" build.log | sed 's/.*Garantie\///' | sort -u | head -n 60 || true
+          tail -n 3 build.log
+      - name: Im Simulator starten
+        run: |
+          set -x
+          DEVICE=$(xcrun simctl list devices available | grep -E "iPhone 1[5-9]|iPhone 2[0-9]" | head -n 1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          echo "Simulator: $DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          APP=build/Build/Products/Debug-iphonesimulator/Kaufarchiv.app
+          xcrun simctl install "$DEVICE" "$APP"
+          mkdir -p screenshots
+          xcrun simctl launch "$DEVICE" ch.kaufarchiv.app
+          sleep 12
+          xcrun simctl io "$DEVICE" screenshot screenshots/01-onboarding.png
+          xcrun simctl terminate "$DEVICE" ch.kaufarchiv.app || true
+          xcrun simctl launch "$DEVICE" ch.kaufarchiv.app -didOnboard YES
+          sleep 12
+          xcrun simctl io "$DEVICE" screenshot screenshots/02-uebersicht.png
+          # Läuft die App nach 12 Sekunden noch? (Absturz beim Start würde hier auffallen.)
+          xcrun simctl spawn "$DEVICE" launchctl list | grep -i kaufarchiv
+          ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i kaufarchiv && exit 1 || echo "Kein Absturzbericht"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-build
+          path: |
+            build.log
+            screenshots
+
+  receipt-eval:
+    name: Erkennung mit echten Belegfotos
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Belegfotos von Wikimedia Commons laden
+        run: python3 scripts/fetch_receipts.py receipts 45
+      - name: Prüfwerkzeug bauen
+        working-directory: KaufarchivCore
+        run: swift build -c release --product ReceiptEval 2>&1 | tail -n 60
+      - name: Erkennung ausführen
+        run: |
+          KaufarchivCore/.build/release/ReceiptEval receipts > eval.txt 2>&1
+          cat eval.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receipt-eval
+          path: |
+            eval.txt
+            receipts
