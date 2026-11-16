@@ -42,6 +42,7 @@ public enum ReminderPlanner {
         now: Date,
         hour: Int = 9,
         limit: Int = 60,
+        showProductNames: Bool = true,
         calendar: Calendar = .current
     ) -> ReminderPlan {
         var all: [PlannedReminder] = []
@@ -57,7 +58,7 @@ public enum ReminderPlanner {
                     fireDate: fireDate,
                     daysBefore: daysBefore,
                     title: title(for: deadline, daysBefore: daysBefore),
-                    body: body(for: deadline, daysBefore: daysBefore)
+                    body: body(for: deadline, showProductName: showProductNames)
                 ))
             }
         }
@@ -69,18 +70,20 @@ public enum ReminderPlanner {
     static func title(for deadline: DeadlineInput, daysBefore: Int) -> String {
         switch deadline.kind {
         case .returnWindow: return "Rückgabefrist endet \(when(daysBefore))"
-        case .legal: return "Mängelrechte enden \(when(daysBefore))"
-        case .manufacturer: return "Herstellergarantie endet \(when(daysBefore))"
-        case .extended: return "Zusatzgarantie endet \(when(daysBefore))"
+        case .legal: return "Mängelrechte prüfen – Ende \(when(daysBefore))"
+        case .manufacturer: return "Herstellergarantie prüfen – Ende \(when(daysBefore))"
+        case .extended: return "Zusatzgarantie prüfen – Ende \(when(daysBefore))"
         }
     }
 
-    static func body(for deadline: DeadlineInput, daysBefore: Int) -> String {
+    /// Bewusst ohne Druck formuliert: Eine auslaufende Garantie ist kein Grund, ein funktionierendes Produkt zu reklamieren.
+    static func body(for deadline: DeadlineInput, showProductName: Bool) -> String {
+        let name = showProductName ? deadline.productName : "Ein Produkt in deinem Kaufarchiv"
         switch deadline.kind {
         case .returnWindow:
-            return "\(deadline.productName): Jetzt entscheiden, ob du das Produkt behalten möchtest."
+            return "\(name): Behalten oder Rückgabe vorbereiten?"
         default:
-            return "\(deadline.productName): Funktioniert alles? Mängel jetzt noch melden."
+            return "\(name): Unterlagen liegen bereit. Nur nötig, falls etwas nicht funktioniert."
         }
     }
 

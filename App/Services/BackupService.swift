@@ -38,6 +38,7 @@ struct CoverageDTO: Codable {
     var basis: String
     var isConfirmed: Bool
     var remindersEnabled: Bool
+    var isDecided: Bool?
 }
 
 struct ClaimEventDTO: Codable {
@@ -54,6 +55,8 @@ struct ClaimDTO: Codable {
     var statusRaw: String
     var contact: String
     var reference: String
+    var kindRaw: String?
+    var trackingNumber: String?
     var events: [ClaimEventDTO]
     var documents: [DocumentDTO]
 }
@@ -90,6 +93,7 @@ struct ReceiptDTO: Codable {
     var uid: UUID
     var merchant: String
     var purchaseDate: Date
+    var deliveryDate: Date?
     var totalCents: Int?
     var currency: String
     var channelRaw: String
@@ -215,6 +219,7 @@ enum BackupService {
             }
             let receipt = Receipt(merchant: dto.merchant, purchaseDate: dto.purchaseDate)
             receipt.uid = dto.uid
+            receipt.deliveryDate = dto.deliveryDate
             receipt.totalCents = dto.totalCents
             receipt.currency = dto.currency
             receipt.channelRaw = dto.channelRaw
@@ -252,7 +257,7 @@ enum BackupService {
     private static func dto(_ receipt: Receipt) -> ReceiptDTO {
         ReceiptDTO(
             uid: receipt.uid, merchant: receipt.merchant, purchaseDate: receipt.purchaseDate,
-            totalCents: receipt.totalCents, currency: receipt.currency, channelRaw: receipt.channelRaw,
+            deliveryDate: receipt.deliveryDate, totalCents: receipt.totalCents, currency: receipt.currency, channelRaw: receipt.channelRaw,
             countryCode: receipt.countryCode, orderNumber: receipt.orderNumber, notes: receipt.notes,
             createdAt: receipt.createdAt, merchantLine: receipt.merchantLine, dateLine: receipt.dateLine,
             totalLine: receipt.totalLine,
@@ -271,7 +276,8 @@ enum BackupService {
                 CoverageDTO(
                     uid: coverage.uid, kindRaw: coverage.kindRaw, startDate: coverage.startDate,
                     endDate: coverage.endDate, provider: coverage.provider, notes: coverage.notes,
-                    basis: coverage.basis, isConfirmed: coverage.isConfirmed, remindersEnabled: coverage.remindersEnabled
+                    basis: coverage.basis, isConfirmed: coverage.isConfirmed, remindersEnabled: coverage.remindersEnabled,
+                    isDecided: coverage.isDecided
                 )
             },
             documents: product.documentList.map(dto),
@@ -279,6 +285,7 @@ enum BackupService {
                 ClaimDTO(
                     uid: claim.uid, createdAt: claim.createdAt, issue: claim.issue, remedyRaw: claim.remedyRaw,
                     statusRaw: claim.statusRaw, contact: claim.contact, reference: claim.reference,
+                    kindRaw: claim.kindRaw, trackingNumber: claim.trackingNumber,
                     events: claim.eventList.map { ClaimEventDTO(uid: $0.uid, date: $0.date, text: $0.text) },
                     documents: claim.documentList.map(dto)
                 )
@@ -342,6 +349,7 @@ enum BackupService {
             coverage.provider = coverageDTO.provider
             coverage.notes = coverageDTO.notes
             coverage.remindersEnabled = coverageDTO.remindersEnabled
+            coverage.isDecided = coverageDTO.isDecided ?? false
             context.insert(coverage)
             coverage.product = product
         }
@@ -358,6 +366,8 @@ enum BackupService {
             claim.statusRaw = claimDTO.statusRaw
             claim.contact = claimDTO.contact
             claim.reference = claimDTO.reference
+            claim.kindRaw = claimDTO.kindRaw ?? ClaimKind.defect.rawValue
+            claim.trackingNumber = claimDTO.trackingNumber ?? ""
             context.insert(claim)
             claim.product = product
             for eventDTO in claimDTO.events {

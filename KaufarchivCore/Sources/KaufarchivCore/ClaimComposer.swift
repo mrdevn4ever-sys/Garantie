@@ -32,11 +32,14 @@ public struct ClaimContext: Equatable, Sendable {
     public var coverage: CoverageKind?
     public var senderName: String
     public var attachmentCount: Int
+    /// `true` für eine Rückgabe innerhalb der Rückgabefrist statt einer Mängelmeldung.
+    public var isReturn: Bool
 
     public init(
         productName: String, brand: String = "", model: String = "", serialNumber: String = "",
         merchant: String = "", purchaseDate: Date? = nil, orderNumber: String = "", issue: String,
-        remedy: ClaimRemedy = .open, coverage: CoverageKind? = nil, senderName: String = "", attachmentCount: Int = 0
+        remedy: ClaimRemedy = .open, coverage: CoverageKind? = nil, senderName: String = "", attachmentCount: Int = 0,
+        isReturn: Bool = false
     ) {
         self.productName = productName
         self.brand = brand
@@ -50,13 +53,14 @@ public struct ClaimContext: Equatable, Sendable {
         self.coverage = coverage
         self.senderName = senderName
         self.attachmentCount = attachmentCount
+        self.isReturn = isReturn
     }
 }
 
 /// Erstellt einen sachlichen Nachrichtenentwurf für eine Reklamation.
 public enum ClaimComposer {
     public static func subject(_ context: ClaimContext) -> String {
-        var subject = "Reklamation: \(context.productName)"
+        var subject = "\(context.isReturn ? "Rückgabe" : "Reklamation"): \(context.productName)"
         if !context.orderNumber.isEmpty { subject += " (Bestellung \(context.orderNumber))" }
         return subject
     }
@@ -66,7 +70,7 @@ public enum ClaimComposer {
         lines.append("Guten Tag")
         lines.append("")
 
-        var intro = "ich melde einen Mangel an folgendem Produkt"
+        var intro = context.isReturn ? "ich möchte folgendes Produkt zurückgeben" : "ich melde einen Mangel an folgendem Produkt"
         if let date = context.purchaseDate {
             intro += ", das ich am \(dateFormatter.string(from: date))"
             intro += context.merchant.isEmpty ? " gekauft habe" : " bei \(context.merchant) gekauft habe"
@@ -83,8 +87,24 @@ public enum ClaimComposer {
         if !context.orderNumber.isEmpty { lines.append("Bestell-/Rechnungsnummer: \(context.orderNumber)") }
         lines.append("")
 
-        lines.append("Beschreibung des Mangels:")
         let issue = context.issue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if context.isReturn {
+            if !issue.isEmpty {
+                lines.append("Anmerkung: \(issue)")
+                lines.append("")
+            }
+            lines.append("Bitte teilen Sie mir mit, wie die Rücksendung erfolgen soll, und bestätigen Sie mir den Eingang dieser Mitteilung sowie die Erstattung des Kaufpreises.")
+            lines.append("")
+            if context.attachmentCount > 0 {
+                lines.append("Den Kaufbeleg finden Sie im Anhang.")
+                lines.append("")
+            }
+            lines.append("Freundliche Grüsse")
+            if !context.senderName.isEmpty { lines.append(context.senderName) }
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("Beschreibung des Mangels:")
         lines.append(issue.isEmpty ? "[Bitte Mangel beschreiben]" : issue)
         lines.append("")
 

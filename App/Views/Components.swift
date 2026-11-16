@@ -67,12 +67,15 @@ extension Color {
 struct CoverageRow: View {
     let coverage: Coverage
     var showProduct = false
+    var reminderStatus: ReminderCenter.Status?
 
     var body: some View {
         let days = coverage.daysRemaining()
+        // Unbestätigte Vorschläge werden neutral dargestellt – ohne dringlich wirkenden Countdown.
+        let tone: Color = coverage.isConfirmed ? Color.deadline(daysRemaining: days) : .secondary
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol)
-                .foregroundStyle(Color.deadline(daysRemaining: days))
+                .foregroundStyle(tone)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 if showProduct {
@@ -83,19 +86,41 @@ struct CoverageRow: View {
                 HStack(spacing: 6) {
                     Text(coverage.kind.label)
                         .font(showProduct ? .subheadline : .body)
-                        .foregroundStyle(showProduct ? .secondary : .primary)
+                        .foregroundStyle(showProduct ? Color.secondary : Color.primary)
                     if !coverage.isConfirmed { SuggestionBadge() }
                 }
-                Text("bis \(Fmt.date(coverage.endDate)) · \(Fmt.remaining(days: days))")
+                Text(coverage.isConfirmed
+                     ? "bis \(Fmt.date(coverage.endDate)) · \(Fmt.remaining(days: days))"
+                     : "voraussichtlich bis \(Fmt.date(coverage.endDate)) · noch nicht bestätigt")
                     .font(.footnote)
-                    .foregroundStyle(Color.deadline(daysRemaining: days))
-                if !showProduct, days >= 0 {
+                    .foregroundStyle(tone)
+                if coverage.kind == .returnWindow, coverage.isDecided {
+                    Text("Entscheidung getroffen").font(.caption).foregroundStyle(.secondary)
+                }
+                if !showProduct, days >= 0, coverage.isConfirmed {
                     ProgressView(value: coverage.progress())
-                        .tint(Color.deadline(daysRemaining: days))
+                        .tint(tone)
+                }
+                if let reminderText {
+                    Label(reminderText, systemImage: reminderStatus == .scheduled ? "bell" : "bell.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var reminderText: String? {
+        guard let reminderStatus else { return nil }
+        switch reminderStatus {
+        case .scheduled: return "Erinnerung geplant"
+        case .notificationsOff: return "Mitteilungen deaktiviert"
+        case .outsideWindow: return "Erinnerung wird später eingeplant"
+        case .disabled: return "Keine Erinnerung"
+        case .unconfirmed: return "Erinnerung erst nach Bestätigung"
+        case .notApplicable: return nil
+        }
     }
 
     private var symbol: String {

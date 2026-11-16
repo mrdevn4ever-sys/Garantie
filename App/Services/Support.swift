@@ -16,6 +16,7 @@ enum Prefs {
     static let debugPro = "debugProOverride"
     static let appLockEnabled = "appLockEnabled"
     static let senderName = "senderName"
+    static let hideNamesInReminders = "hideNamesInReminders"
 
     static let freeProductLimit = 10
 

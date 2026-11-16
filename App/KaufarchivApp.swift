@@ -9,6 +9,8 @@ enum AppTab: Hashable {
 struct ImportRequest: Identifiable {
     let id = UUID()
     var file: ImportedFile?
+    /// Gesetzt, wenn der Beleg aus dem Eingang stammt; er wird nach dem Speichern dort entfernt.
+    var inboxItem: InboxItem?
 }
 
 @MainActor
@@ -16,9 +18,26 @@ struct ImportRequest: Identifiable {
 final class AppRouter {
     var tab: AppTab = .overview
     var importRequest: ImportRequest?
+    /// Übernommene, aber noch nicht erfasste Belege (Teilen-Erweiterung und gesicherte Entwürfe).
+    var inbox: [InboxItem] = []
 
     func startImport(file: ImportedFile? = nil) {
         importRequest = ImportRequest(file: file)
+    }
+
+    func reloadInbox() {
+        inbox = InboxStore.items()
+    }
+
+    func open(_ item: InboxItem) throws {
+        var file = try ImportedFile.from(url: item.url)
+        file.filename = item.displayName
+        importRequest = ImportRequest(file: file, inboxItem: item)
+    }
+
+    func discard(_ item: InboxItem) {
+        InboxStore.remove(item)
+        reloadInbox()
     }
 }
 
@@ -99,6 +118,7 @@ struct RootView: View {
             }
         }
         .task {
+            router.reloadInbox()
             await lock.unlock()
             await reminders.refresh(context: context)
         }
@@ -107,6 +127,7 @@ struct RootView: View {
             case .background:
                 lock.lockIfEnabled()
             case .active:
+                router.reloadInbox()
                 Task {
                     await lock.unlock()
                     await purchases.refreshEntitlements()

@@ -184,6 +184,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.returnLeadDays) private var returnLeadDays = 3
     @AppStorage(Prefs.warrantyLeadDays) private var warrantyLeadDays = 30
     @AppStorage(Prefs.reminderHour) private var reminderHour = 9
+    @AppStorage(Prefs.hideNamesInReminders) private var hideNamesInReminders = false
     @AppStorage(Prefs.iCloudEnabled) private var iCloudEnabled = false
     @AppStorage(Prefs.appLockEnabled) private var appLockEnabled = false
     #if DEBUG
@@ -254,11 +255,13 @@ struct SettingsView: View {
                         Text("\(hour):00 Uhr").tag(hour)
                     }
                 }
+                Toggle("Produktnamen in Mitteilungen ausblenden", isOn: $hideNamesInReminders)
             } header: {
                 Text("Erinnerungen")
             } footer: {
-                Text("Zusätzlich erinnert Kaufarchiv einen Tag vor Ablauf der Rückgabe und eine Woche vor Ablauf einer Garantie.")
+                Text("Erinnert wird nur an bestätigte Fristen: zusätzlich einen Tag vor Ablauf der Rückgabe und eine Woche vor Ablauf einer Garantie. Ohne Produktnamen bleibt auf dem Sperrbildschirm unsichtbar, was du gekauft hast.")
             }
+            .onChange(of: hideNamesInReminders) { _, _ in replan() }
             .onChange(of: returnLeadDays) { _, _ in replan() }
             .onChange(of: warrantyLeadDays) { _, _ in replan() }
             .onChange(of: reminderHour) { _, _ in replan() }
@@ -383,6 +386,8 @@ struct DataManagementView: View {
     @State private var resultTitle = ""
     @State private var resultMessage: String?
     @State private var showRestorePicker = false
+    @State private var pendingRestore: URL?
+    @State private var restorePreview = ""
 
     var body: some View {
         List {
@@ -435,15 +440,31 @@ struct DataManagementView: View {
         .fileImporter(isPresented: $showRestorePicker, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url):
+                // Erst lesen und prüfen, dann mit Vorschau bestätigen lassen – nichts wird ungefragt zusammengeführt.
                 run {
-                    let report = try BackupService.restore(url: url, context: context)
-                    show(report, title: "Wiederherstellung abgeschlossen", restored: true)
-                    Task { await reminders.refresh(context: context) }
+                    let report = try BackupService.verify(url: url)
+                    restorePreview = "Die Sicherung enthält \(report.receipts) Rechnungen, \(report.products) Produkte und \(report.documents) Dokumente."
+                        + (report.isHealthy ? "" : " \(report.damagedDocuments.count) Dokumente sind beschädigt oder fehlen.")
+                        + " Bereits vorhandene Einträge bleiben unverändert."
+                    pendingRestore = url
                 }
             case .failure(let error):
                 resultTitle = "Datei konnte nicht geöffnet werden"
                 resultMessage = error.localizedDescription
             }
+        }
+        .confirmationDialog("Sicherung wiederherstellen?", isPresented: Binding(get: { pendingRestore != nil }, set: { if !$0 { pendingRestore = nil } }), titleVisibility: .visible) {
+            Button("Fehlende Einträge ergänzen") {
+                guard let url = pendingRestore else { return }
+                run {
+                    let report = try BackupService.restore(url: url, context: context)
+                    show(report, title: "Wiederherstellung abgeschlossen", restored: true)
+                    Task { await reminders.refresh(context: context) }
+                }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text(restorePreview)
         }
         .alert(resultTitle, isPresented: Binding(get: { resultMessage != nil }, set: { if !$0 { resultMessage = nil } })) {
             Button("OK", role: .cancel) {}

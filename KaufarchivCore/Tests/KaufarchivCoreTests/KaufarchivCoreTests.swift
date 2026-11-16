@@ -272,6 +272,30 @@ final class KaufarchivCoreTests: XCTestCase {
         XCTAssertEqual(ClaimComposer.subject(context), "Reklamation: Kaffeemaschine (Bestellung A-77)")
     }
 
+    func testReturnDraftDoesNotClaimADefect() {
+        let context = ClaimContext(
+            productName: "Kopfhörer", merchant: "Galaxus", purchaseDate: date(2024, 5, 12), orderNumber: "B-9",
+            issue: "", senderName: "Max Muster", attachmentCount: 1, isReturn: true
+        )
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_CH")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "dd.MM.yyyy"
+        let body = ClaimComposer.body(context, dateFormatter: formatter)
+        XCTAssertTrue(body.contains("ich möchte folgendes Produkt zurückgeben, das ich am 12.05.2024 bei Galaxus gekauft habe"))
+        XCTAssertFalse(body.contains("Mangel"))
+        XCTAssertEqual(ClaimComposer.subject(context), "Rückgabe: Kopfhörer (Bestellung B-9)")
+    }
+
+    func testReminderTextCanHideProductNames() {
+        let plan = ReminderPlanner.plan(
+            deadlines: [DeadlineInput(id: "x", productName: "Kaffeemaschine", kind: .legal, endDate: date(2024, 8, 1))],
+            leadDays: [.legal: [7]], now: date(2024, 6, 1), showProductNames: false, calendar: calendar
+        )
+        XCTAssertEqual(plan.scheduled.count, 1)
+        XCTAssertFalse(plan.scheduled[0].body.contains("Kaffeemaschine"))
+    }
+
     func testCSVEscaping() {
         XCTAssertEqual(CSVBuilder.row(["a", "b;c", "d\"e"]), "a;\"b;c\";\"d\"\"e\"")
     }

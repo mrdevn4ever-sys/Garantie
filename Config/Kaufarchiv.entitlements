@@ -12,5 +12,9 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.ch.kaufarchiv.app</string>
+	</array>
 </dict>
 </plist>

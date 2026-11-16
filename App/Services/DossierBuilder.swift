@@ -14,7 +14,7 @@ enum DossierBuilder {
         let pageRect = CGRect(origin: .zero, size: pageSize)
         let format = UIGraphicsPDFRendererFormat()
         format.documentInfo = [
-            kCGPDFContextTitle as String: "Reklamationsdossier \(product?.displayName ?? "")",
+            kCGPDFContextTitle as String: "\(claim.kind.label) \(product?.displayName ?? "")",
             kCGPDFContextCreator as String: "Kaufarchiv"
         ]
         let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: format)
@@ -74,7 +74,7 @@ enum DossierBuilder {
 
             // Seite 1: Übersicht
             newPage()
-            draw("Reklamationsdossier", font: .boldSystemFont(ofSize: 22), spacingAfter: 2)
+            draw(claim.kind == .productReturn ? "Rückgabedossier" : "Reklamationsdossier", font: .boldSystemFont(ofSize: 22), spacingAfter: 2)
             draw("Erstellt am \(Fmt.date(Date())) mit Kaufarchiv", font: .systemFont(ofSize: 10), color: .darkGray, spacingAfter: 10)
 
             heading("Produkt")
@@ -86,6 +86,7 @@ enum DossierBuilder {
             heading("Kauf")
             row("Händler", product?.receipt?.merchant ?? "")
             if let product { row("Kaufdatum", Fmt.date(product.purchaseDate)) }
+            if let delivery = product?.receipt?.deliveryDate { row("Erhalten am", Fmt.date(delivery)) }
             row("Bestell-/Rechnungsnummer", product?.receipt?.orderNumber ?? "")
             if let product, let price = product.priceCents {
                 row("Kaufpreis", Money.format(cents: price, currency: product.currency))
@@ -101,9 +102,10 @@ enum DossierBuilder {
                 }
             }
 
-            heading("Mangel")
-            row("Gemeldet am", Fmt.date(claim.createdAt))
+            heading(claim.kind == .productReturn ? "Rückgabe" : "Mangel")
+            row("Erfasst am", Fmt.date(claim.createdAt))
             row("Gewünschte Lösung", claim.remedy.label)
+            row("Sendungsnummer", claim.trackingNumber)
             row("Status", claim.status.label)
             row("Kontakt", claim.contact)
             row("Vorgangsnummer", claim.reference)
@@ -157,7 +159,7 @@ enum DossierBuilder {
             }
         }
 
-        let name = "Reklamation \(product?.displayName ?? "Produkt") \(Fmt.fileStamp()).pdf"
+        let name = "\(claim.kind.label) \(product?.displayName ?? "Produkt") \(Fmt.fileStamp()).pdf"
         return try TempFiles.write(data, name: name)
     }
 
@@ -175,7 +177,8 @@ enum DossierBuilder {
             remedy: claim.remedy,
             coverage: product?.bestActiveCoverage(now: claim.createdAt)?.kind,
             senderName: senderName,
-            attachmentCount: attachmentCount
+            attachmentCount: attachmentCount,
+            isReturn: claim.kind == .productReturn
         )
     }
 }

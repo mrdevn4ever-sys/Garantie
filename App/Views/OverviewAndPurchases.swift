@@ -14,6 +14,7 @@ struct OverviewView: View {
 
     @State private var showClaimPicker = false
     @State private var showPaywall = false
+    @State private var inboxError: String?
 
     private var activeProducts: [OwnedProduct] { products.filter { $0.status == .active } }
 
@@ -55,6 +56,39 @@ struct OverviewView: View {
                 .disabled(activeProducts.isEmpty)
             }
 
+            if !router.inbox.isEmpty {
+                Section {
+                    ForEach(router.inbox) { item in
+                        Button {
+                            do {
+                                try router.open(item)
+                            } catch {
+                                inboxError = error.localizedDescription
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "tray.and.arrow.down")
+                                    .foregroundStyle(.orange)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.displayName).foregroundStyle(.primary).lineLimit(1)
+                                    Text("Übernommen am \(Fmt.dateTime(item.addedAt)) · noch nicht erfasst")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .swipeActions {
+                            Button("Löschen", role: .destructive) { router.discard(item) }
+                        }
+                    }
+                } header: {
+                    Text("Eingang (\(router.inbox.count))")
+                } footer: {
+                    Text("Geteilte Belege und gesicherte Entwürfe. Antippen, um die Erfassung abzuschliessen.")
+                }
+            }
+
             if products.isEmpty {
                 Section {
                     ContentUnavailableView(
@@ -89,14 +123,14 @@ struct OverviewView: View {
                 }
 
                 if !openClaims.isEmpty {
-                    Section("Offene Reklamationen") {
+                    Section("Offene Fälle") {
                         ForEach(openClaims) { claim in
                             NavigationLink {
                                 ClaimDetailView(claim: claim)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(claim.product?.displayName ?? "Produkt").font(.body.weight(.medium))
-                                    Text("\(claim.status.label) · seit \(Fmt.date(claim.createdAt))")
+                                    Text("\(claim.kind.label) · \(claim.status.label) · seit \(Fmt.date(claim.createdAt))")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                 }
@@ -146,6 +180,11 @@ struct OverviewView: View {
         }
         .sheet(isPresented: $showPaywall) {
             PaywallView(reason: nil)
+        }
+        .alert("Beleg konnte nicht geöffnet werden", isPresented: Binding(get: { inboxError != nil }, set: { if !$0 { inboxError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(inboxError ?? "")
         }
     }
 
@@ -201,7 +240,7 @@ struct ProductRow: View {
             HStack(spacing: 4) {
                 Text("\(next.kind.shortLabel): \(Fmt.remaining(days: days))")
                     .font(.caption)
-                    .foregroundStyle(Color.deadline(daysRemaining: days))
+                    .foregroundStyle(next.isConfirmed ? Color.deadline(daysRemaining: days) : Color.secondary)
                 if !next.isConfirmed { SuggestionBadge() }
             }
         } else if !product.coverageList.isEmpty {

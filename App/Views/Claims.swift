@@ -22,7 +22,7 @@ struct ClaimStartView: View {
                 }
                 ForEach(candidates) { product in
                     NavigationLink {
-                        ClaimEditorForm(product: product) { dismiss() }
+                        ClaimEditorForm(product: product, kind: .defect) { dismiss() }
                     } label: {
                         ProductRow(product: product)
                     }
@@ -40,14 +40,15 @@ struct ClaimStartView: View {
     }
 }
 
-/// Reklamation für ein bereits gewähltes Produkt (aus der Produktakte).
+/// Reklamation oder Rückgabe für ein bereits gewähltes Produkt (aus der Produktakte).
 struct ClaimEditorView: View {
     let product: OwnedProduct
+    var kind: ClaimKind = .defect
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ClaimEditorForm(product: product) { dismiss() }
+            ClaimEditorForm(product: product, kind: kind) { dismiss() }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Abbrechen") { dismiss() }
@@ -59,7 +60,10 @@ struct ClaimEditorView: View {
 
 struct ClaimEditorForm: View {
     let product: OwnedProduct
+    var kind: ClaimKind = .defect
     var onDone: () -> Void
+
+    private var isReturn: Bool { kind == .productReturn }
 
     @Environment(\.modelContext) private var context
 
@@ -81,14 +85,18 @@ struct ClaimEditorForm: View {
                 }
                 coverageStatus
             }
-            Section("Was ist das Problem?") {
-                TextField("Beschreibe den Mangel: Was funktioniert nicht, seit wann, was hast du schon versucht?",
+            Section(isReturn ? "Anmerkung (optional)" : "Was ist das Problem?") {
+                TextField(isReturn
+                          ? "Grund der Rückgabe oder Hinweise für den Händler"
+                          : "Beschreibe den Mangel: Was funktioniert nicht, seit wann, was hast du schon versucht?",
                           text: $issue, axis: .vertical)
                     .lineLimit(4...10)
             }
-            Section("Was wünschst du dir?") {
-                Picker("Lösung", selection: $remedy) {
-                    ForEach(ClaimRemedy.allCases) { Text($0.label).tag($0) }
+            Section(isReturn ? "Händler" : "Was wünschst du dir?") {
+                if !isReturn {
+                    Picker("Lösung", selection: $remedy) {
+                        ForEach(ClaimRemedy.allCases) { Text($0.label).tag($0) }
+                    }
                 }
                 TextField("Kontakt des Händlers (E-Mail, optional)", text: $contact)
                     .keyboardType(.emailAddress)
@@ -115,12 +123,12 @@ struct ClaimEditorForm: View {
                     Label("Foto oder Dokument ergänzen", systemImage: "plus")
                 }
             } header: {
-                Text("Fotos vom Mangel")
+                Text(isReturn ? "Fotos (z. B. Zustand, Einlieferungsbeleg)" : "Fotos vom Mangel")
             } footer: {
                 Text("Rechnung und vorhandene Unterlagen des Produkts (\(product.allDocuments.count)) werden automatisch beigelegt.")
             }
         }
-        .navigationTitle("Reklamation")
+        .navigationTitle(kind.label)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -128,7 +136,7 @@ struct ClaimEditorForm: View {
                     ProgressView()
                 } else {
                     Button("Weiter") { save() }
-                        .disabled(issue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!isReturn && issue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -139,7 +147,19 @@ struct ClaimEditorForm: View {
 
     @ViewBuilder
     private var coverageStatus: some View {
-        if let best = product.bestActiveCoverage() {
+        if isReturn {
+            if let window = product.coverageList.first(where: { $0.kind == .returnWindow }) {
+                Label("Rückgabefrist bis \(Fmt.date(window.endDate))\(window.isConfirmed ? "" : " (unbestätigter Vorschlag)")",
+                      systemImage: window.isActive() ? "arrow.uturn.backward.circle" : "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(window.isActive() ? Color.green : Color.orange)
+            } else {
+                Label("Für dieses Produkt ist keine Rückgabefrist erfasst. Prüfe die Bedingungen des Händlers.",
+                      systemImage: "questionmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } else if let best = product.bestActiveCoverage() {
             Label("\(best.kind.label) bis \(Fmt.date(best.endDate))\(best.isConfirmed ? "" : " (unbestätigter Vorschlag)")",
                   systemImage: "checkmark.shield")
                 .font(.footnote)
@@ -160,18 +180,25 @@ struct ClaimEditorForm: View {
         isSaving = true
         Task {
             let claim = Claim(issue: issue.trimmingCharacters(in: .whitespacesAndNewlines))
-            claim.remedy = remedy
+            claim.kind = kind
+            claim.remedy = isReturn ? .refund : remedy
             claim.contact = contact.trimmingCharacters(in: .whitespaces)
             context.insert(claim)
             claim.product = product
 
-            let event = ClaimEvent(text: "Mangel erfasst")
+            // Mit der vorbereiteten Rückgabe ist die Entscheidung gefallen; weitere Erinnerungen entfallen.
+            if isReturn {
+                for window in product.coverageList where window.kind == .returnWindow { window.isDecided = true }
+            }
+            let event = ClaimEvent(text: isReturn ? "Rückgabe vorbereitet" : "Mangel erfasst")
             context.insert(event)
             event.claim = claim
 
             for photo in photos {
                 let isImage = !DocumentRenderer.isPDF(data: photo.data, typeIdentifier: photo.typeIdentifier)
-                let document = await DocumentFactory.make(file: photo, kind: isImage ? .photo : .other, title: isImage ? "Foto vom Mangel" : "")
+                let document = await DocumentFactory.make(
+                    file: photo, kind: isImage ? .photo : .other, title: isImage ? (isReturn ? "Foto zur Rückgabe" : "Foto vom Mangel") : ""
+                )
                 context.insert(document)
                 document.claim = claim
             }
@@ -208,7 +235,7 @@ struct ClaimDetailView: View {
     var body: some View {
         Group {
             if isGone {
-                ContentUnavailableView("Reklamation gelöscht", systemImage: "trash")
+                ContentUnavailableView("Vorgang gelöscht", systemImage: "trash")
             } else {
                 content
             }
@@ -226,6 +253,7 @@ struct ClaimDetailView: View {
         DossierBuilder.context(for: claim, senderName: senderName, attachmentCount: attachmentCount)
     }
 
+    private var isReturn: Bool { claim.kind == .productReturn }
     private var messageBody: String { ClaimComposer.body(claimContext) }
     private var messageSubject: String { ClaimComposer.subject(claimContext) }
 
@@ -247,13 +275,30 @@ struct ClaimDetailView: View {
                     .autocorrectionDisabled()
                 TextField("Vorgangsnummer des Händlers", text: $claim.reference)
                     .autocorrectionDisabled()
+                TextField(isReturn ? "Sendungsnummer der Rücksendung" : "Sendungsnummer (falls eingeschickt)", text: $claim.trackingNumber)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.characters)
             }
 
-            Section("Mangel") {
+            Section(isReturn ? "Anmerkung" : "Mangel") {
                 TextField("Beschreibung", text: $claim.issue, axis: .vertical)
                     .lineLimit(3...10)
-                Picker("Gewünschte Lösung", selection: $claim.remedyRaw) {
-                    ForEach(ClaimRemedy.allCases) { Text($0.label).tag($0.rawValue) }
+                if !isReturn {
+                    Picker("Gewünschte Lösung", selection: $claim.remedyRaw) {
+                        ForEach(ClaimRemedy.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                }
+            }
+
+            if isReturn, claim.status.isOpen {
+                Section {
+                    Button("Erstattung erhalten – Rückgabe abschliessen", systemImage: "checkmark.circle") {
+                        claim.status = .resolved
+                        claim.product?.status = .returned
+                        addEvent("Erstattung bestätigt, Rückgabe abgeschlossen")
+                    }
+                } footer: {
+                    Text("Die Rückgabe gilt erst als abgeschlossen, wenn du die Erstattung selbst bestätigst. Das Produkt wird dann als «Zurückgegeben» archiviert; alle Unterlagen bleiben erhalten.")
                 }
             }
 
@@ -311,7 +356,7 @@ struct ClaimDetailView: View {
             } header: {
                 Text("Nachrichtenentwurf")
             } footer: {
-                Text("Der Entwurf ist eine Formulierungshilfe und keine Rechtsberatung. Bitte vor dem Senden prüfen.")
+                Text("Der Entwurf ist eine Formulierungshilfe und keine Rechtsberatung. Prüfe Empfänger, Text und Anhänge vor dem Senden. Eine E-Mail allein wahrt nicht in jedem Fall eine Frist.")
             }
 
             Section {
@@ -331,7 +376,7 @@ struct ClaimDetailView: View {
                     }
                 }
             } header: {
-                Text("Reklamationsdossier")
+                Text(isReturn ? "Rückgabedossier" : "Reklamationsdossier")
             } footer: {
                 Text("Ein PDF mit Produktdaten, Mangelbeschreibung, Verlauf, Fotos und allen \(attachmentCount) Unterlagen – zum Anhängen an deine Nachricht.")
             }
@@ -363,10 +408,10 @@ struct ClaimDetailView: View {
             }
 
             Section {
-                Button("Reklamation löschen", role: .destructive) { showDeleteConfirm = true }
+                Button("Vorgang löschen", role: .destructive) { showDeleteConfirm = true }
             }
         }
-        .navigationTitle("Reklamation")
+        .navigationTitle(claim.kind.label)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(onDone != nil)
         .toolbar {
@@ -389,11 +434,11 @@ struct ClaimDetailView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .confirmationDialog("Reklamation wirklich löschen?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+        .confirmationDialog("Vorgang wirklich löschen?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Löschen", role: .destructive) { deleteClaim() }
             Button("Abbrechen", role: .cancel) {}
         } message: {
-            Text("Verlauf und Fotos dieser Reklamation werden gelöscht. Das Produkt bleibt erhalten.")
+            Text("Verlauf und Fotos dieses Vorgangs werden gelöscht. Das Produkt bleibt erhalten.")
         }
     }
 

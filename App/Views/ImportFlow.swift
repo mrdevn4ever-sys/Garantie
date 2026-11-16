@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import VisionKit
+import PDFKit
 import Observation
 import KaufarchivCore
 
@@ -31,6 +32,10 @@ final class ImportSession {
     // Schritt 3: Angaben zum Kauf
     var merchant = ""
     var purchaseDate = Date()
+    /// `false`, solange das Kaufdatum weder erkannt noch vom Nutzer bestätigt wurde.
+    var dateKnown = false
+    var hasDeliveryDate = false
+    var deliveryDate = Date()
     var totalText = ""
     var currency = Prefs.defaults.string(forKey: Prefs.currency) ?? "CHF"
     var channel: PurchaseChannel = .store
@@ -61,16 +66,40 @@ final class ImportSession {
 
     var hasDocument: Bool { file != nil }
 
+    /// Hinweis, wenn genau diese Datei bereits gespeichert ist.
+    var duplicateNote: String?
+
+    /// Beginn der Fristen: Erhalt der Ware, sonst Kaufdatum.
+    var coverageStart: Date { hasDeliveryDate ? deliveryDate : purchaseDate }
+
     init() {
         applyRuleSuggestions()
     }
 
     // MARK: Verarbeitung
 
-    func process(_ file: ImportedFile) async {
+    func process(_ file: ImportedFile, context: ModelContext) async {
         isProcessing = true
         errorMessage = nil
+        duplicateNote = nil
         defer { isProcessing = false }
+
+        // Dateien sind Datenmaterial: Grösse begrenzen, geschützte PDFs verständlich ablehnen.
+        guard file.data.count <= InboxStore.maxFileBytes else {
+            errorMessage = "Die Datei ist grösser als 50 MB. Bitte eine kleinere Datei wählen."
+            return
+        }
+        if DocumentRenderer.isPDF(data: file.data, typeIdentifier: file.typeIdentifier),
+           PDFDocument(data: file.data)?.isLocked == true {
+            errorMessage = "Dieses PDF ist passwortgeschützt. Bitte zuerst ohne Passwort sichern und erneut wählen."
+            return
+        }
+        let hash = Hashing.sha256(file.data)
+        let descriptor = FetchDescriptor<StoredDocument>(predicate: #Predicate { $0.sha256 == hash })
+        if let existing = try? context.fetch(descriptor).first {
+            let owner = existing.receipt?.displayMerchant ?? existing.product?.displayName ?? "einem anderen Eintrag"
+            duplicateNote = "Genau diese Datei ist bereits gespeichert (bei \(owner)). Du kannst trotzdem fortfahren."
+        }
 
         let images = DocumentRenderer.allPageImages(data: file.data, typeIdentifier: file.typeIdentifier)
         guard !images.isEmpty else {
@@ -90,6 +119,7 @@ final class ImportSession {
     }
 
     func startManual() {
+        dateKnown = false
         file = nil
         pageImages = []
         lines = []
@@ -101,6 +131,7 @@ final class ImportSession {
         draft = parsed
         merchant = parsed.merchant?.value ?? ""
         purchaseDate = parsed.purchaseDate?.value ?? Date()
+        dateKnown = parsed.purchaseDate != nil
         totalText = parsed.total.map { Money.plainText(cents: Money.cents(from: $0.value)) } ?? ""
         currency = parsed.currency
         channel = parsed.isOnlineOrder ? .online : .store
@@ -155,7 +186,9 @@ final class ImportSession {
 
     func makeCoverages() -> [Coverage] {
         var result: [Coverage] = []
-        let confirmed = !reviewLater
+        // Ohne bestätigtes Datum entsteht keine scheinbar verlässliche Frist.
+        let confirmed = !reviewLater && dateKnown
+        let purchaseDate = coverageStart
         if returnEnabled {
             result.append(Coverage(
                 kind: .returnWindow, startDate: purchaseDate,
@@ -195,6 +228,7 @@ final class ImportSession {
 
     func save(context: ModelContext) async throws {
         let receipt = Receipt(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), purchaseDate: purchaseDate)
+        receipt.deliveryDate = hasDeliveryDate ? deliveryDate : nil
         receipt.totalCents = Money.cents(fromText: totalText)
         receipt.currency = currency
         receipt.channel = channel
@@ -229,6 +263,12 @@ final class ImportSession {
         }
         try context.save()
     }
+
+    /// Sichert den unfertigen Import als Entwurf im Eingang.
+    func saveDraft() throws {
+        guard let file else { return }
+        try InboxStore.add(data: file.data, filename: file.filename)
+    }
 }
 
 // MARK: Ablauf
@@ -244,7 +284,9 @@ struct ImportFlowView: View {
     @Environment(\.modelContext) private var context
     @Environment(PurchaseManager.self) private var purchases
     @Environment(ReminderCenter.self) private var reminders
+    @Environment(AppRouter.self) private var router
     @Query private var existingProducts: [OwnedProduct]
+    @State private var showCancelDialog = false
 
     @State private var session = ImportSession()
     @State private var path: [ImportStep] = []
@@ -259,7 +301,7 @@ struct ImportFlowView: View {
                 session: session,
                 onFile: { file in
                     Task {
-                        await session.process(file)
+                        await session.process(file, context: context)
                         if session.hasDocument { path = [.items] }
                     }
                 },
@@ -270,7 +312,7 @@ struct ImportFlowView: View {
             )
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Abbrechen") { dismiss() }
+                    Button("Abbrechen") { cancel() }
                 }
             }
             .navigationDestination(for: ImportStep.self) { step in
@@ -286,12 +328,27 @@ struct ImportFlowView: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Abbrechen") { dismiss() }
+                        Button("Abbrechen") { cancel() }
                     }
                 }
             }
         }
         .interactiveDismissDisabled()
+        .confirmationDialog("Erfassung abbrechen?", isPresented: $showCancelDialog, titleVisibility: .visible) {
+            Button("Als Entwurf im Eingang sichern") {
+                do {
+                    try session.saveDraft()
+                    router.reloadInbox()
+                    dismiss()
+                } catch {
+                    saveError = error.localizedDescription
+                }
+            }
+            Button("Verwerfen", role: .destructive) { dismiss() }
+            Button("Weiter bearbeiten", role: .cancel) {}
+        } message: {
+            Text("Der Beleg bleibt als Entwurf erhalten und erscheint in der Übersicht unter «Eingang». Bereits geprüfte Angaben werden beim nächsten Öffnen neu erkannt.")
+        }
         .sheet(item: $evidence) { item in
             EvidenceView(item: item)
         }
@@ -305,9 +362,18 @@ struct ImportFlowView: View {
         }
         .task {
             if let file = request.file, !session.hasDocument {
-                await session.process(file)
+                await session.process(file, context: context)
                 if session.hasDocument { path = [.items] }
             }
+        }
+    }
+
+    private func cancel() {
+        // Belege aus dem Eingang liegen dort weiterhin; nur neue Importe brauchen eine Rückfrage.
+        if session.hasDocument && request.inboxItem == nil {
+            showCancelDialog = true
+        } else {
+            dismiss()
         }
     }
 
@@ -327,6 +393,7 @@ struct ImportFlowView: View {
             defer { isSaving = false }
             do {
                 try await session.save(context: context)
+                if let item = request.inboxItem { router.discard(item) }
                 if reminders.authorization == .notDetermined {
                     await reminders.requestAuthorization()
                 }
@@ -442,6 +509,13 @@ struct ImportItemsStep: View {
                 StepHeader(step: 2, title: "Produkte auswählen",
                            subtitle: "Jedes ausgewählte Produkt bekommt eine eigene Akte mit eigenen Fristen und bleibt mit dieser Rechnung verbunden.")
             }
+            if let note = session.duplicateNote {
+                Section {
+                    Label(note, systemImage: "doc.on.doc")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
             Section {
                 ForEach($session.items) { $item in
                     VStack(alignment: .leading, spacing: 8) {
@@ -543,6 +617,14 @@ struct ImportDetailsStep: View {
                          value: Fmt.date(session.purchaseDate), missingHint: session.hasDocument ? "Nicht erkannt – bitte prüfen" : nil) {
                     DatePicker("Kaufdatum", selection: $session.purchaseDate, in: ...Date(), displayedComponents: .date)
                 }
+                if !session.dateKnown {
+                    Button("Kaufdatum stimmt", systemImage: "checkmark.circle") { session.dateKnown = true }
+                        .font(.footnote)
+                }
+                Toggle("Ware später erhalten (Lieferung)", isOn: $session.hasDeliveryDate)
+                if session.hasDeliveryDate {
+                    DatePicker("Erhalten am", selection: $session.deliveryDate, in: session.purchaseDate..., displayedComponents: .date)
+                }
                 fieldRow(title: "Gesamtbetrag", detected: session.draft?.total.map { ($0.confidence, $0.lineIndex) }, value: session.totalText) {
                     HStack {
                         Text("Gesamtbetrag")
@@ -577,11 +659,12 @@ struct ImportDetailsStep: View {
             } header: {
                 Text("Wo gekauft?")
             } footer: {
-                Text("Kaufart und Land bestimmen, welche Fristen im nächsten Schritt vorgeschlagen werden.")
+                Text("Kaufart und Land bestimmen, welche Fristen im nächsten Schritt vorgeschlagen werden. Bei Lieferung beginnen die Fristen mit dem Erhalt der Ware.")
             }
         }
         .navigationTitle("Angaben")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: session.purchaseDate) { _, _ in session.dateKnown = true }
         .onChange(of: session.channel) { _, _ in session.applyRuleSuggestions() }
         .onChange(of: session.countryCode) { _, _ in session.applyRuleSuggestions() }
         .safeAreaInset(edge: .bottom) {
@@ -639,11 +722,20 @@ struct ImportCoverageStep: View {
                            subtitle: "Die Werte sind Vorschläge für \(DeadlineRules.rule(for: session.countryCode).name). Massgebend sind Vertrag und AGB des Händlers.")
             }
 
+            if !session.dateKnown {
+                Section {
+                    Label("Das Kaufdatum wurde nicht erkannt und nicht bestätigt. Die Fristen werden deshalb nur als unbestätigte Vorschläge gespeichert und lösen keine Erinnerungen aus.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
+
             Section {
                 Toggle("Rückgabe möglich", isOn: $session.returnEnabled)
                 if session.returnEnabled {
                     Stepper("\(session.returnDays) Tage", value: $session.returnDays, in: 1...365)
-                    endRow(DeadlineRules.endDate(from: session.purchaseDate, days: session.returnDays, calendar: .current))
+                    endRow(DeadlineRules.endDate(from: session.coverageStart, days: session.returnDays, calendar: .current))
                 }
             } header: {
                 Text(CoverageKind.returnWindow.label)
@@ -655,7 +747,7 @@ struct ImportCoverageStep: View {
                 Toggle("Gesetzliche Mängelrechte", isOn: $session.legalEnabled)
                 if session.legalEnabled {
                     Stepper("\(session.legalMonths) Monate", value: $session.legalMonths, in: 1...120)
-                    endRow(DeadlineRules.endDate(from: session.purchaseDate, months: session.legalMonths, calendar: .current))
+                    endRow(DeadlineRules.endDate(from: session.coverageStart, months: session.legalMonths, calendar: .current))
                 }
             } header: {
                 Text(CoverageKind.legal.label)
@@ -668,7 +760,7 @@ struct ImportCoverageStep: View {
                 if session.manufacturerEnabled {
                     Stepper("\(session.manufacturerMonths) Monate", value: $session.manufacturerMonths, in: 1...240)
                     TextField("Hersteller (optional)", text: $session.manufacturerProvider)
-                    endRow(DeadlineRules.endDate(from: session.purchaseDate, months: session.manufacturerMonths, calendar: .current))
+                    endRow(DeadlineRules.endDate(from: session.coverageStart, months: session.manufacturerMonths, calendar: .current))
                 }
             } header: {
                 Text(CoverageKind.manufacturer.label)
@@ -681,7 +773,7 @@ struct ImportCoverageStep: View {
                 if session.extendedEnabled {
                     Stepper("\(session.extendedMonths) Monate", value: $session.extendedMonths, in: 1...240)
                     TextField("Anbieter (optional)", text: $session.extendedProvider)
-                    endRow(DeadlineRules.endDate(from: session.purchaseDate, months: session.extendedMonths, calendar: .current))
+                    endRow(DeadlineRules.endDate(from: session.coverageStart, months: session.extendedMonths, calendar: .current))
                 }
             } header: {
                 Text(CoverageKind.extended.label)
@@ -690,7 +782,7 @@ struct ImportCoverageStep: View {
             Section {
                 Toggle("Fristen später prüfen", isOn: $session.reviewLater)
             } footer: {
-                Text("Die Fristen werden dann als unbestätigte Vorschläge gespeichert und in der App entsprechend markiert.")
+                Text("Unbestätigte Vorschläge werden in der App markiert und lösen keine Erinnerungen aus, bis du sie bestätigst.")
             }
 
             Section("Schritt 5 von 5 · Zusammenfassung") {

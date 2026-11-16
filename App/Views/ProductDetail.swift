@@ -20,6 +20,7 @@ struct ProductDetailView: View {
     @State private var calendarRequest: CalendarRequest?
     @State private var showDeleteConfirm = false
     @State private var showClaimEditor = false
+    @State private var showReturnEditor = false
     @State private var repairToEdit: Repair?
     @State private var showNewRepair = false
     @State private var isAddingDocument = false
@@ -43,6 +44,7 @@ struct ProductDetailView: View {
     private var content: some View {
         List {
             headerSection
+            returnSection
             purchaseSection
             coverageSection
             documentSection
@@ -76,7 +78,10 @@ struct ProductDetailView: View {
             RepairEditView(product: product, repair: nil)
         }
         .sheet(isPresented: $showClaimEditor, onDismiss: commit) {
-            ClaimEditorView(product: product)
+            ClaimEditorView(product: product, kind: .defect)
+        }
+        .sheet(isPresented: $showReturnEditor, onDismiss: commit) {
+            ClaimEditorView(product: product, kind: .productReturn)
         }
         .sheet(item: $evidence) { item in
             EvidenceView(item: item)
@@ -119,6 +124,27 @@ struct ProductDetailView: View {
     }
 
     @ViewBuilder
+    private var returnSection: some View {
+        if product.status == .active, let window = product.openReturnWindow() {
+            Section {
+                Text(window.isConfirmed
+                     ? "Rückgabe möglich bis \(Fmt.date(window.endDate)) (\(Fmt.remaining(days: window.daysRemaining())))."
+                     : "Rückgabe voraussichtlich bis \(Fmt.date(window.endDate)) möglich – Frist noch nicht bestätigt.")
+                    .font(.subheadline)
+                Button("Behalten", systemImage: "hand.thumbsup") {
+                    window.isDecided = true
+                    commit()
+                }
+                Button("Rückgabe vorbereiten", systemImage: "arrow.uturn.backward") { showReturnEditor = true }
+            } header: {
+                Text("Behalten oder zurückgeben?")
+            } footer: {
+                Text("«Behalten» beendet die Erinnerungen an diese Rückgabefrist. Die Frist selbst bleibt in der Akte sichtbar.")
+            }
+        }
+    }
+
+    @ViewBuilder
     private var purchaseSection: some View {
         if let receipt = product.receipt {
             Section("Kauf") {
@@ -130,6 +156,11 @@ struct ProductDetailView: View {
                         Text("\(Fmt.date(receipt.purchaseDate)) · \(receipt.channel.label)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        if let delivery = receipt.deliveryDate {
+                            Text("Erhalten am \(Fmt.date(delivery))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                         if receipt.productList.count > 1 {
                             Text("Rechnung mit \(receipt.productList.count) Produkten")
                                 .font(.footnote)
@@ -155,7 +186,7 @@ struct ProductDetailView: View {
                 Button {
                     coverageToEdit = coverage
                 } label: {
-                    CoverageRow(coverage: coverage)
+                    CoverageRow(coverage: coverage, reminderStatus: reminders.status(for: coverage))
                 }
                 .buttonStyle(.plain)
                 .swipeActions(edge: .trailing) {
@@ -244,14 +275,14 @@ struct ProductDetailView: View {
     }
 
     private var claimSection: some View {
-        Section("Reklamationen") {
+        Section("Reklamationen und Rückgaben") {
             ForEach(product.claimList) { claim in
                 NavigationLink {
                     ClaimDetailView(claim: claim)
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(claim.issue.isEmpty ? "Reklamation" : claim.issue).lineLimit(2)
-                        Text("\(claim.status.label) · \(Fmt.date(claim.createdAt))")
+                        Text(claim.issue.isEmpty ? claim.kind.label : claim.issue).lineLimit(2)
+                        Text("\(claim.kind.label) · \(claim.status.label) · \(Fmt.date(claim.createdAt))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -517,8 +548,9 @@ struct CoverageEditView: View {
             notes = coverage.notes
             remindersEnabled = coverage.remindersEnabled
         } else {
-            startDate = product.purchaseDate
-            endDate = DeadlineRules.endDate(from: product.purchaseDate, months: 24, calendar: .current)
+            let start = product.receipt?.coverageStart ?? product.purchaseDate
+            startDate = start
+            endDate = DeadlineRules.endDate(from: start, months: 24, calendar: .current)
         }
     }
 
@@ -679,6 +711,14 @@ struct ReceiptDetailView: View {
                         Text(receipt.currency).foregroundStyle(.secondary)
                     }
                 }
+                Toggle("Ware später erhalten (Lieferung)", isOn: Binding(
+                    get: { receipt.deliveryDate != nil },
+                    set: { receipt.deliveryDate = $0 ? receipt.purchaseDate : nil }
+                ))
+                if let delivery = receipt.deliveryDate {
+                    DatePicker("Erhalten am", selection: Binding(get: { delivery }, set: { receipt.deliveryDate = $0 }),
+                               displayedComponents: .date)
+                }
                 TextField("Bestell- oder Rechnungsnummer", text: $receipt.orderNumber)
                 Picker("Kaufart", selection: $receipt.channelRaw) {
                     ForEach(PurchaseChannel.allCases) { Text($0.label).tag($0.rawValue) }
@@ -705,7 +745,7 @@ struct ReceiptDetailView: View {
             } header: {
                 Text("Produkte auf dieser Rechnung")
             } footer: {
-                Text("Änderungen am Kaufdatum verschieben bestehende Fristen nicht automatisch. Passe sie bei Bedarf in der Produktakte an.")
+                Text("Änderungen an Kauf- oder Lieferdatum verschieben bestehende Fristen nicht automatisch – bereits bestätigte Angaben werden nie still überschrieben. Passe sie bei Bedarf in der Produktakte an.")
             }
 
             Section {

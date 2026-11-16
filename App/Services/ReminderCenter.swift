@@ -23,6 +23,24 @@ final class ReminderCenter {
     var deferredCount = 0
     var lastRefresh: Date?
     var lastError: String?
+    /// Kennungen der Fristen, deren Erinnerungen erst später eingeplant werden können.
+    private(set) var deferredDeadlineIDs: Set<String> = []
+
+    enum Status {
+        case scheduled, notificationsOff, outsideWindow, disabled, unconfirmed, notApplicable
+    }
+
+    /// Erinnerungsstatus einer einzelnen Frist – für die Anzeige in der Produktakte.
+    func status(for coverage: Coverage) -> Status {
+        guard coverage.isActive() else { return .notApplicable }
+        if !coverage.isConfirmed { return .unconfirmed }
+        if !coverage.remindersEnabled || coverage.isDecided { return .disabled }
+        if !isAuthorized { return .notificationsOff }
+        let id = coverage.uid.uuidString
+        if pending.contains(where: { $0.id.contains(id) }) { return .scheduled }
+        if deferredDeadlineIDs.contains(id) { return .outsideWindow }
+        return .notApplicable
+    }
 
     var isAuthorized: Bool {
         authorization == .authorized || authorization == .provisional || authorization == .ephemeral
@@ -53,7 +71,8 @@ final class ReminderCenter {
 
         let coverages = (try? context.fetch(FetchDescriptor<Coverage>())) ?? []
         let deadlines: [DeadlineInput] = coverages.compactMap { coverage in
-            guard coverage.remindersEnabled, coverage.endDate > now,
+            // Nur bestätigte Fristen lösen Erinnerungen aus; Vorschläge bleiben still.
+            guard coverage.remindersEnabled, coverage.isConfirmed, !coverage.isDecided, coverage.endDate > now,
                   let product = coverage.product, product.status == .active else { return nil }
             return DeadlineInput(
                 id: coverage.uid.uuidString,
@@ -67,9 +86,11 @@ final class ReminderCenter {
             deadlines: deadlines,
             leadDays: Prefs.leadDays,
             now: now,
-            hour: (0...23).contains(hour) ? hour : 9
+            hour: (0...23).contains(hour) ? hour : 9,
+            showProductNames: !Prefs.defaults.bool(forKey: Prefs.hideNamesInReminders)
         )
         deferredCount = plan.deferred.count
+        deferredDeadlineIDs = Set(plan.deferred.map { $0.deadlineID })
 
         let existing = await center.pendingNotificationRequests()
             .map { $0.identifier }

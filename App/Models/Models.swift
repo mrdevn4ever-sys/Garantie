@@ -48,6 +48,20 @@ enum DocumentKind: String, CaseIterable, Identifiable {
     }
 }
 
+enum ClaimKind: String, CaseIterable, Identifiable {
+    case defect
+    case productReturn
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .defect: return "Reklamation"
+        case .productReturn: return "Rückgabe"
+        }
+    }
+}
+
 enum ClaimStatus: String, CaseIterable, Identifiable {
     case draft, sent, inProgress, resolved, rejected
 
@@ -71,6 +85,8 @@ final class Receipt {
     var uid: UUID = UUID()
     var merchant: String = ""
     var purchaseDate: Date = Date()
+    /// Erhalt der Ware, falls abweichend vom Kaufdatum (massgebend für den Fristbeginn bei Lieferung).
+    var deliveryDate: Date?
     var totalCents: Int?
     var currency: String = "CHF"
     var channelRaw: String = PurchaseChannel.store.rawValue
@@ -97,6 +113,9 @@ final class Receipt {
         get { PurchaseChannel(rawValue: channelRaw) ?? .store }
         set { channelRaw = newValue.rawValue }
     }
+
+    /// Beginn der Fristen: Lieferung, sonst Kaufdatum.
+    var coverageStart: Date { deliveryDate ?? purchaseDate }
 
     var productList: [OwnedProduct] { (products ?? []).sorted { $0.createdAt < $1.createdAt } }
     var documentList: [StoredDocument] { (documents ?? []).sorted { $0.createdAt < $1.createdAt } }
@@ -160,6 +179,11 @@ final class OwnedProduct {
         coverageList.first { $0.endDate >= now }
     }
 
+    /// Laufende Rückgabefrist, über die noch nicht entschieden wurde.
+    func openReturnWindow(now: Date = Date()) -> Coverage? {
+        coverageList.first { $0.kind == .returnWindow && $0.isActive(now: now) && !$0.isDecided }
+    }
+
     func matches(_ query: String) -> Bool {
         let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return true }
@@ -183,6 +207,8 @@ final class Coverage {
     /// `false` = automatisch vorgeschlagen und noch nicht bestätigt.
     var isConfirmed: Bool = true
     var remindersEnabled: Bool = true
+    /// Bei Rückgabefristen: Die Entscheidung «behalten» oder «zurückgeben» ist gefallen.
+    var isDecided: Bool = false
 
     var product: OwnedProduct?
 
@@ -267,6 +293,9 @@ final class Claim {
     var statusRaw: String = ClaimStatus.draft.rawValue
     var contact: String = ""
     var reference: String = ""
+    var kindRaw: String = ClaimKind.defect.rawValue
+    /// Sendungsnummer der Rücksendung bzw. des eingeschickten Geräts.
+    var trackingNumber: String = ""
 
     var product: OwnedProduct?
 
@@ -287,6 +316,11 @@ final class Claim {
     var status: ClaimStatus {
         get { ClaimStatus(rawValue: statusRaw) ?? .draft }
         set { statusRaw = newValue.rawValue }
+    }
+
+    var kind: ClaimKind {
+        get { ClaimKind(rawValue: kindRaw) ?? .defect }
+        set { kindRaw = newValue.rawValue }
     }
 
     var eventList: [ClaimEvent] { (events ?? []).sorted { $0.date < $1.date } }
