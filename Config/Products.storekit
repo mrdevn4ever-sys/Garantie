@@ -1,0 +1,67 @@
+{
+  "identifier" : "6F2A9C41",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "59.90",
+      "familyShareable" : false,
+      "internalID" : "6740000001",
+      "localizations" : [
+        {
+          "description" : "Alle Pro-Funktionen, einmal bezahlt.",
+          "displayName" : "Pro dauerhaft",
+          "locale" : "de"
+        }
+      ],
+      "productID" : "ch.kaufarchiv.pro.lifetime",
+      "referenceName" : "Pro dauerhaft",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_locale" : "de",
+    "_storefront" : "CHE"
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21740001",
+      "localizations" : [
+
+      ],
+      "name" : "Kaufarchiv Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "19.90",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6740000002",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Alle Pro-Funktionen im Jahresabo.",
+              "displayName" : "Pro jährlich",
+              "locale" : "de"
+            }
+          ],
+          "productID" : "ch.kaufarchiv.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Pro jährlich",
+          "subscriptionGroupID" : "21740001",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
