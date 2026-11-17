@@ -428,7 +428,7 @@ public struct ReceiptParser: Sendable {
     }
 
     private static let warrantyRegex = try! NSRegularExpression(pattern: #"(\d{1,2})\s*(jahre?|jahren|monate?|monaten|years?|months?|ans?|mois|anni|mesi)\s*(?:\w+\s*){0,2}(garantie|warranty|garanzia)|(garantie|warranty|garanzia)\s*:?\s*(\d{1,2})\s*(jahre?|monate?|years?|months?|ans?|mois|anni|mesi)"#, options: [.caseInsensitive])
-    private static let returnRegex = try! NSRegularExpression(pattern: #"(\d{1,3})\s*(?:tage?n?|days?|jours?|giorni)\s*(?:\w+\s*){0,3}(?:ruckgabe|umtausch|return|retour|reso|ruckgaberecht)|(?:ruckgabe|umtausch|return|retour|reso)\w*\s*(?:\w+\s*){0,3}(\d{1,3})\s*(?:tage?n?|days?|jours?|giorni)"#, options: [.caseInsensitive])
+    private static let returnRegex = try! NSRegularExpression(pattern: #"(\d{1,3})\s*(?:tage?n?|days?|jours?|giorni)\s*(?:[^\d\s]+\s*){0,3}(?:ruckgabe|umtausch|return|retour|reso|ruckgaberecht)|(?:ruckgabe|umtausch|return|retour|reso)\w*\s*(?:[^\d\s]+\s*){0,3}(\d{1,3})\s*(?:tage?n?|days?|jours?|giorni)"#, options: [.caseInsensitive])
 
     func detectWarrantyMonths(lines: [TextLine], folded: [String]) -> Extracted<Int>? {
         for (index, f) in folded.enumerated() {
