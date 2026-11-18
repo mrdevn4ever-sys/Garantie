@@ -12,10 +12,12 @@ concurrency:
 jobs:
   core-tests:
     name: Kernlogik (Unit-Tests)
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Stabiles Xcode 27 und iOS-SDK wählen
+        run: bash scripts/ci/select_xcode27.sh
       - name: Swift-Version
         run: swift --version
       - name: Tests
@@ -24,12 +26,14 @@ jobs:
 
   app-build:
     name: App bauen und im Simulator starten
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - name: Stabiles Xcode 27 und iOS-SDK wählen
+        run: bash scripts/ci/select_xcode27.sh
       - name: Xcode-Version
-        run: xcodebuild -version
+        run: xcodebuild -version && xcrun --sdk iphoneos --show-sdk-version
       - name: App für den Simulator bauen
         run: |
           xcodebuild -project Kaufarchiv.xcodeproj -scheme Kaufarchiv -configuration Debug \
@@ -73,10 +77,12 @@ jobs:
 
   receipt-eval:
     name: Erkennung mit echten Belegfotos
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - name: Stabiles Xcode 27 und iOS-SDK wählen
+        run: bash scripts/ci/select_xcode27.sh
       - name: Belegfotos von Wikimedia Commons laden
         run: python3 scripts/fetch_receipts.py receipts 45
       - name: Prüfwerkzeug bauen
